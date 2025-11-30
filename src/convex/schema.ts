@@ -32,12 +32,14 @@ const schema = defineSchema(
       role: v.optional(roleValidator), // role of the user. do not remove
     }).index("email", ["email"]), // index for the email. do not remove or modify
 
-    // add other tables here
-
-    // tableName: defineTable({
-    //   ...
-    //   // table fields
-    // }).index("by_field", ["field"])
+    certificates: defineTable({
+      candidateName: v.string(),
+      role: v.string(),
+      duration: v.string(),
+      accessCode: v.string(), // Unique slug for public access
+      issueDate: v.number(),
+      createdBy: v.optional(v.id("users")),
+    }).index("by_accessCode", ["accessCode"]),
   },
   {
     schemaValidation: false,
