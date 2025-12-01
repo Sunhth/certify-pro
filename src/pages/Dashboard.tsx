@@ -2,15 +2,20 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Checkbox } from "@/components/ui/checkbox";
 import { api } from "@/convex/_generated/api";
+import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useMutation, useQuery } from "convex/react";
 import { Download, FileSpreadsheet, Loader2, Plus, Trash2, Upload } from "lucide-react";
+import { CheckedState } from "@radix-ui/react-checkbox";
 import { useState } from "react";
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
 import { useAuth } from "@/hooks/use-auth";
 import { useEffect } from "react";
 import { useNavigate } from "react-router";
+
+type CertificateDoc = Doc<"certificates">;
 
 export default function Dashboard() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -29,6 +34,32 @@ export default function Dashboard() {
 
   const [newCert, setNewCert] = useState({ candidateName: "", role: "", duration: "" });
   const [isUploading, setIsUploading] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<Id<"certificates">>>(new Set());
+  const [isExporting, setIsExporting] = useState(false);
+
+  useEffect(() => {
+    if (!certificates) return;
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      let changed = false;
+
+      const latestIds = new Set(certificates.map((cert) => cert._id));
+      for (const id of Array.from(next)) {
+        if (!latestIds.has(id)) {
+          next.delete(id);
+          changed = true;
+        }
+      }
+      for (const cert of certificates) {
+        if (!next.has(cert._id)) {
+          next.add(cert._id);
+          changed = true;
+        }
+      }
+
+      return changed ? next : prev;
+    });
+  }, [certificates]);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -50,6 +81,56 @@ export default function Dashboard() {
         toast.error("Failed to delete");
       }
     }
+  };
+
+  const toggleCertificateSelection = (id: Id<"certificates">) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (!certificates || certificates.length === 0) return;
+    setSelectedIds((prev) =>
+      prev.size === certificates.length
+        ? new Set()
+        : new Set(certificates.map((cert) => cert._id)),
+    );
+  };
+
+  const downloadQrImages = async (items: CertificateDoc[]) => {
+    const failed: string[] = [];
+    for (const cert of items) {
+      try {
+        const viewerLink = `${window.location.origin}/c/${cert.accessCode}`;
+        const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(
+          viewerLink,
+        )}`;
+        const response = await fetch(qrUrl);
+        if (!response.ok) {
+          throw new Error("QR request failed");
+        }
+        const blob = await response.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = objectUrl;
+        anchor.download = `${cert.candidateName.replace(/\s+/g, "_")}_QR.png`;
+        document.body.appendChild(anchor);
+        anchor.click();
+        document.body.removeChild(anchor);
+        URL.revokeObjectURL(objectUrl);
+      } catch (error) {
+        console.error("Failed to download QR", error);
+        failed.push(cert.candidateName);
+      }
+    }
+    return failed;
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -93,22 +174,56 @@ export default function Dashboard() {
     reader.readAsBinaryString(file);
   };
 
-  const handleDownloadExcel = () => {
+  const handleDownloadExcel = async () => {
     if (!certificates) return;
 
-    const data = certificates.map(cert => ({
-      "Full Name": cert.candidateName,
-      "Role": cert.role,
-      "Duration": cert.duration,
-      "Issue Date": new Date(cert.issueDate).toLocaleDateString(),
-      "Viewer Link": `${window.location.origin}/c/${cert.accessCode}`
-    }));
+    const selectedCerts = certificates.filter((cert) => selectedIds.has(cert._id));
+    if (selectedCerts.length === 0) {
+      toast.error("Select at least one certificate to export.");
+      return;
+    }
 
-    const ws = XLSX.utils.json_to_sheet(data);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Certificates");
-    XLSX.writeFile(wb, "ProjXty_Certificates.xlsx");
+    setIsExporting(true);
+    try {
+      const data = selectedCerts.map((cert) => ({
+        NAME: cert.candidateName,
+        ROLE: cert.role,
+        "DURATION (TIME PERIOD)": cert.duration,
+        LINK: `${window.location.origin}/c/${cert.accessCode}`,
+      }));
+
+      const ws = XLSX.utils.json_to_sheet(data);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Certificates");
+      XLSX.writeFile(wb, "ProjXty_Selected_Certificates.xlsx");
+
+      const failures = await downloadQrImages(selectedCerts);
+      if (failures.length > 0) {
+        toast.warning(
+          `Excel downloaded but QR files failed for: ${failures.join(", ")}`,
+        );
+      } else {
+        toast.success("Excel and QR codes downloaded.");
+      }
+    } catch (error) {
+      console.error(error);
+      toast.error("Failed to export certificates.");
+    } finally {
+      setIsExporting(false);
+    }
   };
+
+  const totalCertificates = certificates?.length ?? 0;
+  const selectedCount = selectedIds.size;
+  const hasSelectableCertificates = totalCertificates > 0 && selectedCount > 0;
+  const headerSelectionState: CheckedState =
+    totalCertificates === 0
+      ? false
+      : selectedCount === totalCertificates
+        ? true
+        : selectedCount === 0
+          ? false
+          : "indeterminate";
 
   return (
     <div className="min-h-screen bg-background p-8 space-y-8">
@@ -198,11 +313,30 @@ export default function Dashboard() {
                 <Download className="h-10 w-10 text-muted-foreground" />
                 <div>
                   <h3 className="font-semibold">Export Data</h3>
-                  <p className="text-xs text-muted-foreground">Download all certificates with links</p>
+                  <p className="text-xs text-muted-foreground">
+                    Choose certificates below, then export with QR codes
+                  </p>
                 </div>
-                <Button variant="outline" onClick={handleDownloadExcel} disabled={!certificates?.length}>
-                  <Download className="mr-2 h-4 w-4" /> Download Excel
+                <Button
+                  variant="outline"
+                  onClick={handleDownloadExcel}
+                  disabled={!hasSelectableCertificates || isExporting}
+                  className="w-full"
+                >
+                  {isExporting ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Preparing...
+                    </>
+                  ) : (
+                    <>
+                      <Download className="mr-2 h-4 w-4" /> Download Excel & QR
+                    </>
+                  )}
                 </Button>
+                <p className="text-xs text-muted-foreground text-center">
+                  {selectedCount} of {totalCertificates} certificates selected
+                </p>
               </div>
             </div>
           </CardContent>
@@ -224,6 +358,14 @@ export default function Dashboard() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-12">
+                      <Checkbox
+                        aria-label="Select all certificates"
+                        checked={headerSelectionState}
+                        disabled={totalCertificates === 0}
+                        onCheckedChange={() => toggleSelectAll()}
+                      />
+                    </TableHead>
                     <TableHead>Name</TableHead>
                     <TableHead>Role</TableHead>
                     <TableHead>Duration</TableHead>
@@ -234,6 +376,13 @@ export default function Dashboard() {
                 <TableBody>
                   {certificates.map((cert) => (
                     <TableRow key={cert._id}>
+                      <TableCell className="w-12">
+                        <Checkbox
+                          aria-label={`Select ${cert.candidateName}`}
+                          checked={selectedIds.has(cert._id)}
+                          onCheckedChange={() => toggleCertificateSelection(cert._id)}
+                        />
+                      </TableCell>
                       <TableCell className="font-medium">{cert.candidateName}</TableCell>
                       <TableCell>{cert.role}</TableCell>
                       <TableCell>{cert.duration}</TableCell>
