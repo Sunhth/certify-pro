@@ -2,9 +2,22 @@ import { Button } from "@/components/ui/button";
 import { motion } from "framer-motion";
 import { ArrowRight, ShieldCheck } from "lucide-react";
 import { useNavigate } from "react-router";
+import * as XLSX from "xlsx";
 
 export default function Landing() {
   const navigate = useNavigate();
+
+  const exportSiteLinks = () => {
+    const rows = [
+      { name: "Homepage", url: "https://example.com" },
+      { name: "Product Page", url: "https://example.com/product" },
+      { name: "Contact", url: "https://example.com/contact" },
+    ];
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Links");
+    XLSX.writeFile(workbook, "ProjXty_Links.xlsx");
+  };
 
   return (
     <div className="min-h-screen bg-background flex flex-col relative overflow-hidden">
@@ -53,8 +66,11 @@ export default function Landing() {
             <Button size="lg" className="bg-primary text-black hover:bg-primary/90 text-lg h-12 px-8" onClick={() => navigate("/auth")}>
               Access Dashboard <ArrowRight className="ml-2 h-5 w-5" />
             </Button>
-            <Button size="lg" variant="outline" className="text-lg h-12 px-8" onClick={() => window.location.href = "https://projxty.in"}>
+            <Button size="lg" variant="outline" className="text-lg h-12 px-8" onClick={() => (window.location.href = "https://projxty.in")}>
               Visit ProjXty.in
+            </Button>
+            <Button size="lg" variant="secondary" className="text-lg h-12 px-8" onClick={exportSiteLinks}>
+              Export Site Links
             </Button>
           </div>
         </motion.div>
