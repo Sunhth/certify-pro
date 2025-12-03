@@ -6,7 +6,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useMutation, useQuery } from "convex/react";
-import { Download, FileSpreadsheet, Loader2, Plus, Trash2, Upload } from "lucide-react";
+import { Download, FileSpreadsheet, Loader2, Pencil, Plus, Trash2, Upload } from "lucide-react";
 import { CheckedState } from "@radix-ui/react-checkbox";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -14,6 +14,14 @@ import * as XLSX from "xlsx";
 import { useAuth } from "@/hooks/use-auth";
 import { useEffect } from "react";
 import { useNavigate } from "react-router";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 type CertificateDoc = Doc<"certificates">;
 
@@ -31,11 +39,18 @@ export default function Dashboard() {
   const createCertificate = useMutation(api.certificates.create);
   const bulkCreateCertificates = useMutation(api.certificates.bulkCreate);
   const deleteCertificate = useMutation(api.certificates.deleteCertificate);
+  const updateCertificate = useMutation(api.certificates.update);
 
   const [newCert, setNewCert] = useState({ candidateName: "", role: "", duration: "" });
   const [isUploading, setIsUploading] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<Id<"certificates">>>(new Set());
   const [isExporting, setIsExporting] = useState(false);
+  const [editingCert, setEditingCert] = useState<CertificateDoc | null>(null);
+  const [editForm, setEditForm] = useState({
+    candidateName: "",
+    role: "",
+    duration: "",
+  });
 
   useEffect(() => {
     if (!certificates) return;
@@ -80,6 +95,34 @@ export default function Dashboard() {
       } catch (error) {
         toast.error("Failed to delete");
       }
+    }
+  };
+
+  const openEditDialog = (cert: CertificateDoc) => {
+    setEditingCert(cert);
+    setEditForm({
+      candidateName: cert.candidateName,
+      role: cert.role,
+      duration: cert.duration,
+    });
+  };
+
+  const handleEditSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!editingCert) return;
+
+    try {
+      await updateCertificate({
+        id: editingCert._id,
+        candidateName: editForm.candidateName,
+        role: editForm.role,
+        duration: editForm.duration,
+      });
+      toast.success("Certificate updated");
+      setEditingCert(null);
+    } catch (error) {
+      console.error(error);
+      toast.error("Failed to update certificate");
     }
   };
 
@@ -396,9 +439,19 @@ export default function Dashboard() {
                         </a>
                       </TableCell>
                       <TableCell className="text-right">
-                        <Button variant="ghost" size="icon" onClick={() => handleDelete(cert._id)}>
-                          <Trash2 className="h-4 w-4 text-destructive" />
-                        </Button>
+                        <div className="flex justify-end gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            aria-label={`Edit ${cert.candidateName}`}
+                            onClick={() => openEditDialog(cert)}
+                          >
+                            <Pencil className="h-4 w-4 text-primary" />
+                          </Button>
+                          <Button variant="ghost" size="icon" onClick={() => handleDelete(cert._id)}>
+                            <Trash2 className="h-4 w-4 text-destructive" />
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -408,6 +461,57 @@ export default function Dashboard() {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={!!editingCert} onOpenChange={(open) => !open && setEditingCert(null)}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Edit certificate</DialogTitle>
+            <DialogDescription>Update the intern's name, role, or duration.</DialogDescription>
+          </DialogHeader>
+
+          <form className="space-y-4" onSubmit={handleEditSubmit}>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Full Name</label>
+              <Input
+                value={editForm.candidateName}
+                onChange={(e) =>
+                  setEditForm((prev) => ({ ...prev, candidateName: e.target.value }))
+                }
+                required
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Role / Position</label>
+              <Input
+                value={editForm.role}
+                onChange={(e) => setEditForm((prev) => ({ ...prev, role: e.target.value }))}
+                required
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Duration</label>
+              <Input
+                value={editForm.duration}
+                onChange={(e) =>
+                  setEditForm((prev) => ({ ...prev, duration: e.target.value }))
+                }
+                required
+              />
+            </div>
+
+            <DialogFooter className="flex flex-col sm:flex-row sm:justify-end gap-2">
+              <Button type="button" variant="ghost" onClick={() => setEditingCert(null)}>
+                Cancel
+              </Button>
+              <Button type="submit" className="bg-primary text-primary-foreground hover:bg-primary/90">
+                Save changes
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

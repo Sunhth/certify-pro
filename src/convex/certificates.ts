@@ -61,6 +61,25 @@ export const bulkCreate = mutation({
   },
 });
 
+export const update = mutation({
+  args: {
+    id: v.id("certificates"),
+    candidateName: v.string(),
+    role: v.string(),
+    duration: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Unauthorized");
+
+    await ctx.db.patch(args.id, {
+      candidateName: args.candidateName,
+      role: args.role,
+      duration: args.duration,
+    });
+  },
+});
+
 export const list = query({
   args: {},
   handler: async (ctx) => {
