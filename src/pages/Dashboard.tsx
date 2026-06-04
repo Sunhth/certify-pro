@@ -11,6 +11,7 @@ import {
   ChartTooltipContent,
   ChartLegend,
   ChartLegendContent,
+  type ChartConfig,
 } from "@/components/ui/chart";
 import {
   PieChart,
@@ -21,7 +22,7 @@ import {
   XAxis,
   YAxis,
   CartesianGrid,
-  ResponsiveContainer,
+  Tooltip,
 } from "recharts";
 import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
@@ -38,13 +39,13 @@ import {
   TrendingUp,
   Upload,
   Users,
+  Layers,
 } from "lucide-react";
 import { CheckedState } from "@radix-ui/react-checkbox";
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
 import { useAuth } from "@/hooks/use-auth";
-import { useEffect } from "react";
 import { useNavigate } from "react-router";
 import {
   Dialog,
@@ -58,16 +59,89 @@ import { motion } from "framer-motion";
 
 type CertificateDoc = Doc<"certificates">;
 
-const NEON_COLORS = ["#00ff88", "#0088ff", "#ff0080", "#ffcc00", "#aa00ff", "#00ccff", "#ff6600"];
+const NEON_COLORS = [
+  "#00ff88", "#0088ff", "#ff0080", "#ffcc00",
+  "#aa00ff", "#00ccff", "#ff6600", "#ff4488",
+  "#44ffcc", "#8844ff",
+];
+
+// ── Memoized analytics computation (pure function, no hooks) ─────────────────
+function computeAnalytics(certificates: CertificateDoc[]) {
+  if (certificates.length === 0) return null;
+
+  const total = certificates.length;
+
+  // Domain (role) aggregation
+  const domainMap: Record<string, number> = {};
+  for (const c of certificates) {
+    const domain = (c.role || "Unknown").trim();
+    domainMap[domain] = (domainMap[domain] ?? 0) + 1;
+  }
+  const domainData = Object.entries(domainMap)
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, value], i) => ({
+      name,
+      value,
+      pct: Math.round((value / total) * 100),
+      color: NEON_COLORS[i % NEON_COLORS.length],
+    }));
+
+  const uniqueDomains = domainData.length;
+  const topDomain = domainData[0]?.name ?? "—";
+  const topDomainCount = domainData[0]?.value ?? 0;
+
+  // Monthly issuance (last 12 months)
+  const now = new Date();
+  const monthKeys: string[] = [];
+  const monthMap: Record<string, number> = {};
+  for (let i = 11; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const key = d.toLocaleString("default", { month: "short", year: "2-digit" });
+    monthKeys.push(key);
+    monthMap[key] = 0;
+  }
+  for (const c of certificates) {
+    const key = new Date(c.issueDate).toLocaleString("default", { month: "short", year: "2-digit" });
+    if (key in monthMap) monthMap[key]++;
+  }
+  const monthlyData = monthKeys.map((month) => ({ month, count: monthMap[month] }));
+
+  // This month
+  const thisMonthKey = now.toLocaleString("default", { month: "short", year: "2-digit" });
+  const thisMonth = monthMap[thisMonthKey] ?? 0;
+
+  // Growth rate (this month vs last month)
+  const lastMonthKey = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+    .toLocaleString("default", { month: "short", year: "2-digit" });
+  const lastMonth = monthMap[lastMonthKey] ?? 0;
+  const growthRate =
+    lastMonth === 0
+      ? thisMonth > 0 ? 100 : 0
+      : Math.round(((thisMonth - lastMonth) / lastMonth) * 100);
+
+  // Recent 5
+  const recent = [...certificates].slice(0, 5);
+
+  return {
+    total,
+    uniqueDomains,
+    topDomain,
+    topDomainCount,
+    thisMonth,
+    lastMonth,
+    growthRate,
+    domainData,
+    monthlyData,
+    recent,
+  };
+}
 
 export default function Dashboard() {
   const { isAuthenticated, isLoading } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (!isLoading && !isAuthenticated) {
-      navigate("/auth");
-    }
+    if (!isLoading && !isAuthenticated) navigate("/auth");
   }, [isLoading, isAuthenticated, navigate]);
 
   const certificates = useQuery(api.certificates.list);
@@ -83,6 +157,7 @@ export default function Dashboard() {
   const [editingCert, setEditingCert] = useState<CertificateDoc | null>(null);
   const [editForm, setEditForm] = useState({ candidateName: "", role: "", duration: "" });
 
+  // Auto-select newly added certificates
   useEffect(() => {
     if (!certificates) return;
     setSelectedIds((prev) => {
@@ -99,51 +174,30 @@ export default function Dashboard() {
     });
   }, [certificates]);
 
-  // ── Analytics computations ──────────────────────────────────────────────────
-  const analytics = useMemo(() => {
-    if (!certificates || certificates.length === 0) return null;
+  // ── Memoized analytics ───────────────────────────────────────────────────
+  const analytics = useMemo(
+    () => (certificates ? computeAnalytics(certificates) : null),
+    [certificates],
+  );
 
-    const total = certificates.length;
+  // Memoized chart configs
+  const domainPieConfig = useMemo(() => {
+    if (!analytics) return {};
+    return Object.fromEntries(
+      analytics.domainData.map((d) => [d.name, { label: d.name, color: d.color }]),
+    );
+  }, [analytics]);
 
-    // Roles breakdown
-    const roleMap: Record<string, number> = {};
-    for (const c of certificates) {
-      const r = c.role.trim() || "Unknown";
-      roleMap[r] = (roleMap[r] ?? 0) + 1;
-    }
-    const roleData = Object.entries(roleMap)
-      .sort((a, b) => b[1] - a[1])
-      .map(([name, value]) => ({ name, value }));
+  const barChartConfig = useMemo(
+    () => ({ count: { label: "Certificates Issued", color: "#00ff88" } }),
+    [],
+  );
 
-    // Monthly issuance (last 12 months)
-    const monthMap: Record<string, number> = {};
-    const now = new Date();
-    for (let i = 11; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const key = d.toLocaleString("default", { month: "short", year: "2-digit" });
-      monthMap[key] = 0;
-    }
-    for (const c of certificates) {
-      const d = new Date(c.issueDate);
-      const key = d.toLocaleString("default", { month: "short", year: "2-digit" });
-      if (key in monthMap) monthMap[key]++;
-    }
-    const monthlyData = Object.entries(monthMap).map(([month, count]) => ({ month, count }));
+  const domainBarConfig = useMemo<ChartConfig>(() => {
+    return { value: { label: "Interns", color: "#0088ff" } };
+  }, []);
 
-    // Most recent 5
-    const recent = [...certificates].slice(0, 5);
-
-    // Unique roles count
-    const uniqueRoles = Object.keys(roleMap).length;
-
-    // This month count
-    const thisMonthKey = now.toLocaleString("default", { month: "short", year: "2-digit" });
-    const thisMonth = monthMap[thisMonthKey] ?? 0;
-
-    return { total, roleData, monthlyData, recent, uniqueRoles, thisMonth };
-  }, [certificates]);
-
-  // ── Handlers ────────────────────────────────────────────────────────────────
+  // ── Handlers ─────────────────────────────────────────────────────────────
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -282,31 +336,22 @@ export default function Dashboard() {
     }
   };
 
+  // ── Derived selection state ───────────────────────────────────────────────
   const totalCertificates = certificates?.length ?? 0;
   const selectedCount = selectedIds.size;
   const hasSelectableCertificates = totalCertificates > 0 && selectedCount > 0;
-  const headerSelectionState: CheckedState =
-    totalCertificates === 0 ? false
-    : selectedCount === totalCertificates ? true
-    : selectedCount === 0 ? false
-    : "indeterminate";
+  const headerSelectionState: CheckedState = useMemo(() => {
+    if (totalCertificates === 0) return false;
+    if (selectedCount === totalCertificates) return true;
+    if (selectedCount === 0) return false;
+    return "indeterminate";
+  }, [totalCertificates, selectedCount]);
 
-  const roleChartConfig = useMemo(() => {
-    if (!analytics) return {};
-    return Object.fromEntries(
-      analytics.roleData.map((r, i) => [
-        r.name,
-        { label: r.name, color: NEON_COLORS[i % NEON_COLORS.length] },
-      ]),
-    );
-  }, [analytics]);
-
-  const barChartConfig = { count: { label: "Certificates", color: "#00ff88" } };
-
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
-      <div className="border-b border-border/50 bg-card/50 backdrop-blur-sm sticky top-0 z-20">
+      {/* Sticky Header */}
+      <div className="border-b border-border/50 bg-card/60 backdrop-blur-sm sticky top-0 z-20">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
           <div>
             <h1 className="text-2xl font-bold text-primary tracking-tight">ProjXty Admin</h1>
@@ -329,10 +374,12 @@ export default function Dashboard() {
             </TabsTrigger>
           </TabsList>
 
-          {/* ── ANALYTICS TAB ─────────────────────────────────────────────── */}
+          {/* ── ANALYTICS TAB ──────────────────────────────────────────────── */}
           <TabsContent value="analytics" className="space-y-8">
             {!certificates ? (
-              <div className="flex justify-center py-20"><Loader2 className="h-10 w-10 animate-spin text-primary" /></div>
+              <div className="flex justify-center py-20">
+                <Loader2 className="h-10 w-10 animate-spin text-primary" />
+              </div>
             ) : !analytics ? (
               <div className="text-center py-20 text-muted-foreground">
                 <BarChart3 className="h-16 w-16 mx-auto mb-4 opacity-30" />
@@ -343,81 +390,157 @@ export default function Dashboard() {
                 {/* KPI Cards */}
                 <motion.div
                   className="grid grid-cols-2 md:grid-cols-4 gap-4"
-                  initial={{ opacity: 0, y: 20 }}
+                  initial={{ opacity: 0, y: 16 }}
                   animate={{ opacity: 1, y: 0 }}
-                  transition={{ staggerChildren: 0.1 }}
+                  transition={{ duration: 0.4 }}
                 >
                   {[
-                    { label: "Total Interns", value: analytics.total, icon: Users, color: "text-primary", glow: "shadow-[0_0_15px_rgba(0,255,136,0.15)]" },
-                    { label: "Unique Roles", value: analytics.uniqueRoles, icon: Award, color: "text-accent", glow: "shadow-[0_0_15px_rgba(0,136,255,0.15)]" },
-                    { label: "This Month", value: analytics.thisMonth, icon: TrendingUp, color: "text-secondary", glow: "shadow-[0_0_15px_rgba(255,0,128,0.15)]" },
-                    { label: "Top Role", value: analytics.roleData[0]?.name ?? "—", icon: BarChart3, color: "text-yellow-400", glow: "shadow-[0_0_15px_rgba(255,204,0,0.15)]", small: true },
-                  ].map((kpi) => (
-                    <Card key={kpi.label} className={`border-border/50 ${kpi.glow}`}>
-                      <CardContent className="p-5">
-                        <div className="flex items-start justify-between">
-                          <div>
-                            <p className="text-xs text-muted-foreground mb-1">{kpi.label}</p>
-                            <p className={`font-bold ${kpi.small ? "text-lg leading-tight" : "text-3xl"} ${kpi.color}`}>
-                              {kpi.value}
+                    {
+                      label: "Total Interns",
+                      value: analytics.total,
+                      sub: "all time",
+                      icon: Users,
+                      color: "text-primary",
+                      glow: "shadow-[0_0_18px_rgba(0,255,136,0.12)]",
+                      border: "border-primary/20",
+                    },
+                    {
+                      label: "Unique Domains",
+                      value: analytics.uniqueDomains,
+                      sub: "distinct roles",
+                      icon: Layers,
+                      color: "text-accent",
+                      glow: "shadow-[0_0_18px_rgba(0,136,255,0.12)]",
+                      border: "border-accent/20",
+                    },
+                    {
+                      label: "This Month",
+                      value: analytics.thisMonth,
+                      sub: analytics.growthRate >= 0
+                        ? `+${analytics.growthRate}% vs last month`
+                        : `${analytics.growthRate}% vs last month`,
+                      icon: TrendingUp,
+                      color: analytics.growthRate >= 0 ? "text-primary" : "text-destructive",
+                      glow: "shadow-[0_0_18px_rgba(255,0,128,0.12)]",
+                      border: "border-secondary/20",
+                    },
+                    {
+                      label: "Top Domain",
+                      value: analytics.topDomain,
+                      sub: `${analytics.topDomainCount} interns`,
+                      icon: Award,
+                      color: "text-yellow-400",
+                      glow: "shadow-[0_0_18px_rgba(255,204,0,0.12)]",
+                      border: "border-yellow-400/20",
+                      small: true,
+                    },
+                  ].map((kpi, i) => (
+                    <motion.div
+                      key={kpi.label}
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: i * 0.07 }}
+                    >
+                      <Card className={`${kpi.border} ${kpi.glow} h-full`}>
+                        <CardContent className="p-5">
+                          <div className="flex items-start justify-between mb-3">
+                            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wider">
+                              {kpi.label}
                             </p>
+                            <kpi.icon className={`h-4 w-4 ${kpi.color} opacity-60`} />
                           </div>
-                          <kpi.icon className={`h-5 w-5 ${kpi.color} opacity-70`} />
-                        </div>
-                      </CardContent>
-                    </Card>
+                          <p className={`font-bold ${kpi.small ? "text-xl leading-tight" : "text-4xl"} ${kpi.color} mb-1`}>
+                            {kpi.value}
+                          </p>
+                          <p className="text-xs text-muted-foreground">{kpi.sub}</p>
+                        </CardContent>
+                      </Card>
+                    </motion.div>
                   ))}
                 </motion.div>
 
-                {/* Charts Row */}
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  {/* Monthly Bar Chart */}
-                  <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.2 }}>
-                    <Card className="border-border/50 shadow-[0_0_20px_rgba(0,255,136,0.08)]">
+                {/* Charts Row 1: Monthly + Pie */}
+                <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+                  {/* Monthly Bar Chart (wider) */}
+                  <motion.div
+                    className="lg:col-span-3"
+                    initial={{ opacity: 0, x: -20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: 0.2 }}
+                  >
+                    <Card className="border-border/50 shadow-[0_0_20px_rgba(0,255,136,0.06)] h-full">
                       <CardHeader className="pb-2">
-                        <CardTitle className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
-                          Monthly Issuance (Last 12 Months)
+                        <CardTitle className="text-sm font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
+                          <TrendingUp className="h-4 w-4 text-primary" />
+                          Monthly Issuance — Last 12 Months
                         </CardTitle>
                       </CardHeader>
                       <CardContent>
                         <ChartContainer config={barChartConfig} className="h-[260px]">
-                          <BarChart data={analytics.monthlyData} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#333" vertical={false} />
-                            <XAxis dataKey="month" tick={{ fontSize: 10, fill: "#888" }} tickLine={false} axisLine={false} />
-                            <YAxis tick={{ fontSize: 10, fill: "#888" }} tickLine={false} axisLine={false} allowDecimals={false} />
+                          <BarChart
+                            data={analytics.monthlyData}
+                            margin={{ top: 4, right: 4, left: -20, bottom: 0 }}
+                          >
+                            <CartesianGrid strokeDasharray="3 3" stroke="#2a2a2a" vertical={false} />
+                            <XAxis
+                              dataKey="month"
+                              tick={{ fontSize: 10, fill: "#666" }}
+                              tickLine={false}
+                              axisLine={false}
+                            />
+                            <YAxis
+                              tick={{ fontSize: 10, fill: "#666" }}
+                              tickLine={false}
+                              axisLine={false}
+                              allowDecimals={false}
+                            />
                             <ChartTooltip content={<ChartTooltipContent />} />
-                            <Bar dataKey="count" fill="#00ff88" radius={[4, 4, 0, 0]} />
+                            <Bar dataKey="count" fill="#00ff88" radius={[4, 4, 0, 0]} maxBarSize={40} />
                           </BarChart>
                         </ChartContainer>
                       </CardContent>
                     </Card>
                   </motion.div>
 
-                  {/* Roles Pie Chart */}
-                  <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.3 }}>
-                    <Card className="border-border/50 shadow-[0_0_20px_rgba(0,136,255,0.08)]">
+                  {/* Domain Pie Chart */}
+                  <motion.div
+                    className="lg:col-span-2"
+                    initial={{ opacity: 0, x: 20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: 0.3 }}
+                  >
+                    <Card className="border-border/50 shadow-[0_0_20px_rgba(0,136,255,0.06)] h-full">
                       <CardHeader className="pb-2">
-                        <CardTitle className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
-                          Interns by Role
+                        <CardTitle className="text-sm font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
+                          <Layers className="h-4 w-4 text-accent" />
+                          Interns by Domain
                         </CardTitle>
                       </CardHeader>
                       <CardContent>
-                        <ChartContainer config={roleChartConfig} className="h-[260px]">
+                        <ChartContainer config={domainPieConfig} className="h-[260px]">
                           <PieChart>
                             <Pie
-                              data={analytics.roleData}
+                              data={analytics.domainData}
                               cx="50%"
-                              cy="50%"
-                              innerRadius={60}
-                              outerRadius={100}
+                              cy="45%"
+                              innerRadius={55}
+                              outerRadius={90}
                               paddingAngle={3}
                               dataKey="value"
                             >
-                              {analytics.roleData.map((_, index) => (
-                                <Cell key={`cell-${index}`} fill={NEON_COLORS[index % NEON_COLORS.length]} />
+                              {analytics.domainData.map((entry, index) => (
+                                <Cell key={`cell-${index}`} fill={entry.color} />
                               ))}
                             </Pie>
-                            <ChartTooltip content={<ChartTooltipContent />} />
+                            <Tooltip
+                              formatter={(value: number, name: string) => [`${value} interns`, name]}
+                              contentStyle={{
+                                background: "#111",
+                                border: "1px solid #333",
+                                borderRadius: "8px",
+                                fontSize: "12px",
+                              }}
+                            />
                             <ChartLegend content={<ChartLegendContent />} />
                           </PieChart>
                         </ChartContainer>
@@ -426,57 +549,130 @@ export default function Dashboard() {
                   </motion.div>
                 </div>
 
-                {/* Role Breakdown Table + Recent Activity */}
+                {/* Charts Row 2: Domain Horizontal Bar + Recent Activity */}
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  {/* Role Breakdown */}
-                  <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }}>
-                    <Card className="border-border/50">
+                  {/* Domain Horizontal Bar Chart */}
+                  <motion.div
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.4 }}
+                  >
+                    <Card className="border-border/50 shadow-[0_0_20px_rgba(255,0,128,0.06)]">
                       <CardHeader className="pb-2">
-                        <CardTitle className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
-                          Role Breakdown
+                        <CardTitle className="text-sm font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
+                          <BarChart3 className="h-4 w-4 text-secondary" />
+                          Domain Distribution
                         </CardTitle>
                       </CardHeader>
-                      <CardContent className="space-y-3">
-                        {analytics.roleData.map((r, i) => (
-                          <div key={r.name} className="flex items-center gap-3">
-                            <div
-                              className="h-2.5 w-2.5 rounded-full shrink-0"
-                              style={{ backgroundColor: NEON_COLORS[i % NEON_COLORS.length] }}
+                      <CardContent>
+                        <ChartContainer config={domainBarConfig} className="h-[260px]">
+                          <BarChart
+                            data={analytics.domainData.slice(0, 8)}
+                            layout="vertical"
+                            margin={{ top: 0, right: 30, left: 0, bottom: 0 }}
+                          >
+                            <CartesianGrid strokeDasharray="3 3" stroke="#2a2a2a" horizontal={false} />
+                            <XAxis
+                              type="number"
+                              tick={{ fontSize: 10, fill: "#666" }}
+                              tickLine={false}
+                              axisLine={false}
+                              allowDecimals={false}
                             />
-                            <span className="flex-1 text-sm truncate">{r.name}</span>
-                            <Badge variant="secondary" className="font-mono text-xs">{r.value}</Badge>
-                            <div className="w-24 bg-muted rounded-full h-1.5 overflow-hidden">
-                              <div
-                                className="h-full rounded-full"
-                                style={{
-                                  width: `${(r.value / analytics.total) * 100}%`,
-                                  backgroundColor: NEON_COLORS[i % NEON_COLORS.length],
-                                }}
-                              />
-                            </div>
-                            <span className="text-xs text-muted-foreground w-8 text-right">
-                              {Math.round((r.value / analytics.total) * 100)}%
-                            </span>
-                          </div>
-                        ))}
+                            <YAxis
+                              type="category"
+                              dataKey="name"
+                              tick={{ fontSize: 10, fill: "#aaa" }}
+                              tickLine={false}
+                              axisLine={false}
+                              width={90}
+                            />
+                            <Tooltip
+                              formatter={(value: number) => [`${value} interns`]}
+                              contentStyle={{
+                                background: "#111",
+                                border: "1px solid #333",
+                                borderRadius: "8px",
+                                fontSize: "12px",
+                              }}
+                            />
+                            <Bar dataKey="value" radius={[0, 4, 4, 0]} maxBarSize={20}>
+                              {analytics.domainData.slice(0, 8).map((entry, index) => (
+                                <Cell key={`hbar-${index}`} fill={entry.color} />
+                              ))}
+                            </Bar>
+                          </BarChart>
+                        </ChartContainer>
                       </CardContent>
                     </Card>
                   </motion.div>
 
-                  {/* Recent Activity */}
-                  <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5 }}>
+                  {/* Domain Breakdown with Progress Bars + Recent Activity */}
+                  <motion.div
+                    className="space-y-6"
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.5 }}
+                  >
+                    {/* Domain Breakdown */}
+                    <Card className="border-border/50">
+                      <CardHeader className="pb-2">
+                        <CardTitle className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
+                          Domain Breakdown
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-3">
+                        {analytics.domainData.slice(0, 6).map((d) => (
+                          <div key={d.name} className="space-y-1">
+                            <div className="flex items-center justify-between text-xs">
+                              <div className="flex items-center gap-2">
+                                <div
+                                  className="h-2 w-2 rounded-full shrink-0"
+                                  style={{ backgroundColor: d.color }}
+                                />
+                                <span className="truncate max-w-[140px] text-foreground/80">{d.name}</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Badge
+                                  variant="secondary"
+                                  className="font-mono text-xs px-1.5 py-0"
+                                >
+                                  {d.value}
+                                </Badge>
+                                <span className="text-muted-foreground w-8 text-right">{d.pct}%</span>
+                              </div>
+                            </div>
+                            <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                              <div
+                                className="h-full rounded-full transition-all duration-700"
+                                style={{ width: `${d.pct}%`, backgroundColor: d.color }}
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </CardContent>
+                    </Card>
+
+                    {/* Recent Activity */}
                     <Card className="border-border/50">
                       <CardHeader className="pb-2">
                         <CardTitle className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
                           Recent Certificates
                         </CardTitle>
                       </CardHeader>
-                      <CardContent className="space-y-3">
+                      <CardContent className="space-y-2">
                         {analytics.recent.map((cert, i) => (
-                          <div key={cert._id} className="flex items-center gap-3 p-2 rounded-lg hover:bg-muted/50 transition-colors">
+                          <div
+                            key={cert._id}
+                            className="flex items-center gap-3 p-2 rounded-lg hover:bg-muted/40 transition-colors"
+                          >
                             <div
-                              className="h-8 w-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0"
-                              style={{ backgroundColor: `${NEON_COLORS[i % NEON_COLORS.length]}20`, color: NEON_COLORS[i % NEON_COLORS.length] }}
+                              className="h-7 w-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0"
+                              style={{
+                                backgroundColor: NEON_COLORS[i % NEON_COLORS.length] + "22",
+                                color: NEON_COLORS[i % NEON_COLORS.length],
+                                border: `1px solid ${NEON_COLORS[i % NEON_COLORS.length]}44`,
+                              }}
                             >
                               {cert.candidateName.charAt(0).toUpperCase()}
                             </div>
@@ -484,12 +680,12 @@ export default function Dashboard() {
                               <p className="text-sm font-medium truncate">{cert.candidateName}</p>
                               <p className="text-xs text-muted-foreground truncate">{cert.role}</p>
                             </div>
-                            <div className="text-right shrink-0">
-                              <p className="text-xs text-muted-foreground">{new Date(cert.issueDate).toLocaleDateString()}</p>
-                              <a href={`/c/${cert.accessCode}`} target="_blank" className="text-xs text-accent hover:underline">
-                                View
-                              </a>
-                            </div>
+                            <p className="text-xs text-muted-foreground shrink-0">
+                              {new Date(cert.issueDate).toLocaleDateString("en-GB", {
+                                day: "2-digit",
+                                month: "short",
+                              })}
+                            </p>
                           </div>
                         ))}
                       </CardContent>
@@ -500,7 +696,7 @@ export default function Dashboard() {
             )}
           </TabsContent>
 
-          {/* ── ISSUE & MANAGE TAB ────────────────────────────────────────── */}
+          {/* ── ISSUE & MANAGE TAB ─────────────────────────────────────────── */}
           <TabsContent value="issue" className="space-y-8">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
               {/* Create Single */}
@@ -520,7 +716,7 @@ export default function Dashboard() {
                       />
                     </div>
                     <div className="space-y-2">
-                      <label className="text-sm font-medium">Role / Position</label>
+                      <label className="text-sm font-medium">Role / Domain</label>
                       <Input
                         placeholder="Software Intern"
                         value={newCert.role}
@@ -531,7 +727,7 @@ export default function Dashboard() {
                     <div className="space-y-2">
                       <label className="text-sm font-medium">Duration</label>
                       <Input
-                        placeholder="Jan 2024 - Mar 2024"
+                        placeholder="Jan 2024 – Mar 2024"
                         value={newCert.duration}
                         onChange={(e) => setNewCert({ ...newCert, duration: e.target.value })}
                         required
@@ -566,7 +762,11 @@ export default function Dashboard() {
                           disabled={isUploading}
                         />
                         <Button variant="secondary" disabled={isUploading}>
-                          {isUploading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
+                          {isUploading ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          ) : (
+                            <Upload className="mr-2 h-4 w-4" />
+                          )}
                           Select File
                         </Button>
                       </div>
@@ -576,7 +776,9 @@ export default function Dashboard() {
                       <Download className="h-10 w-10 text-muted-foreground" />
                       <div>
                         <h3 className="font-semibold">Export Data</h3>
-                        <p className="text-xs text-muted-foreground">Choose certificates below, then export with QR codes</p>
+                        <p className="text-xs text-muted-foreground">
+                          Choose certificates below, then export with QR codes
+                        </p>
                       </div>
                       <Button
                         variant="outline"
@@ -585,9 +787,14 @@ export default function Dashboard() {
                         className="w-full"
                       >
                         {isExporting ? (
-                          <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Preparing...</>
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            Preparing...
+                          </>
                         ) : (
-                          <><Download className="mr-2 h-4 w-4" /> Download Excel & QR</>
+                          <>
+                            <Download className="mr-2 h-4 w-4" /> Download Excel & QR
+                          </>
                         )}
                       </Button>
                       <p className="text-xs text-muted-foreground text-center">
@@ -599,14 +806,16 @@ export default function Dashboard() {
               </Card>
             </div>
 
-            {/* List */}
+            {/* Certificates Table */}
             <Card className="border-border">
               <CardHeader>
                 <CardTitle>Issued Certificates</CardTitle>
               </CardHeader>
               <CardContent>
                 {!certificates ? (
-                  <div className="flex justify-center p-8"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>
+                  <div className="flex justify-center p-8">
+                    <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                  </div>
                 ) : certificates.length === 0 ? (
                   <div className="text-center p-8 text-muted-foreground">No certificates issued yet.</div>
                 ) : (
@@ -623,7 +832,7 @@ export default function Dashboard() {
                             />
                           </TableHead>
                           <TableHead>Name</TableHead>
-                          <TableHead>Role</TableHead>
+                          <TableHead>Domain / Role</TableHead>
                           <TableHead>Duration</TableHead>
                           <TableHead>Link</TableHead>
                           <TableHead className="text-right">Actions</TableHead>
@@ -643,16 +852,29 @@ export default function Dashboard() {
                             <TableCell>{cert.role}</TableCell>
                             <TableCell>{cert.duration}</TableCell>
                             <TableCell>
-                              <a href={`/c/${cert.accessCode}`} target="_blank" className="text-accent hover:underline text-sm">
+                              <a
+                                href={`/c/${cert.accessCode}`}
+                                target="_blank"
+                                className="text-accent hover:underline text-sm"
+                              >
                                 View Link
                               </a>
                             </TableCell>
                             <TableCell className="text-right">
                               <div className="flex justify-end gap-1">
-                                <Button variant="ghost" size="icon" aria-label={`Edit ${cert.candidateName}`} onClick={() => openEditDialog(cert)}>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  aria-label={`Edit ${cert.candidateName}`}
+                                  onClick={() => openEditDialog(cert)}
+                                >
                                   <Pencil className="h-4 w-4 text-primary" />
                                 </Button>
-                                <Button variant="ghost" size="icon" onClick={() => handleDelete(cert._id)}>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => handleDelete(cert._id)}
+                                >
                                   <Trash2 className="h-4 w-4 text-destructive" />
                                 </Button>
                               </div>
@@ -674,24 +896,40 @@ export default function Dashboard() {
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Edit certificate</DialogTitle>
-            <DialogDescription>Update the intern's name, role, or duration.</DialogDescription>
+            <DialogDescription>Update the intern's name, role/domain, or duration.</DialogDescription>
           </DialogHeader>
           <form className="space-y-4" onSubmit={handleEditSubmit}>
             <div className="space-y-2">
               <label className="text-sm font-medium">Full Name</label>
-              <Input value={editForm.candidateName} onChange={(e) => setEditForm((p) => ({ ...p, candidateName: e.target.value }))} required />
+              <Input
+                value={editForm.candidateName}
+                onChange={(e) => setEditForm((p) => ({ ...p, candidateName: e.target.value }))}
+                required
+              />
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-medium">Role / Position</label>
-              <Input value={editForm.role} onChange={(e) => setEditForm((p) => ({ ...p, role: e.target.value }))} required />
+              <label className="text-sm font-medium">Role / Domain</label>
+              <Input
+                value={editForm.role}
+                onChange={(e) => setEditForm((p) => ({ ...p, role: e.target.value }))}
+                required
+              />
             </div>
             <div className="space-y-2">
               <label className="text-sm font-medium">Duration</label>
-              <Input value={editForm.duration} onChange={(e) => setEditForm((p) => ({ ...p, duration: e.target.value }))} required />
+              <Input
+                value={editForm.duration}
+                onChange={(e) => setEditForm((p) => ({ ...p, duration: e.target.value }))}
+                required
+              />
             </div>
             <DialogFooter className="flex flex-col sm:flex-row sm:justify-end gap-2">
-              <Button type="button" variant="ghost" onClick={() => setEditingCert(null)}>Cancel</Button>
-              <Button type="submit" className="bg-primary text-primary-foreground hover:bg-primary/90">Save changes</Button>
+              <Button type="button" variant="ghost" onClick={() => setEditingCert(null)}>
+                Cancel
+              </Button>
+              <Button type="submit" className="bg-primary text-primary-foreground hover:bg-primary/90">
+                Save changes
+              </Button>
             </DialogFooter>
           </form>
         </DialogContent>
