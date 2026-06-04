@@ -10,7 +10,7 @@ importers:
     dependencies:
       '@convex-dev/auth':
         specifier: ^0.0.86
-        version: 0.0.86(@auth/core@0.37.4)(convex@1.38.0(react@19.1.0))(react@19.1.0)
+        version: 0.0.86(@auth/core@0.37.4)(convex@1.40.0(react@19.1.0))(react@19.1.0)
       '@faker-js/faker':
         specifier: ^9.8.0
         version: 9.8.0
@@ -129,8 +129,8 @@ importers:
         specifier: ^1.1.1
         version: 1.1.1(@types/react-dom@19.1.5(@types/react@19.1.6))(@types/react@19.1.6)(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
       convex:
-        specifier: ^1.38.0
-        version: 1.38.0(react@19.1.0)
+        specifier: ^1.40.0
+        version: 1.40.0(react@19.1.0)
       crud:
         specifier: link:convex-helpers/server/crud
         version: link:convex-helpers/server/crud
@@ -2168,8 +2168,8 @@ packages:
   convert-source-map@2.0.0:
     resolution: {integrity: sha512-Kvp459HrV2FEJ1CAsi1Ku+MY3kasH19TFykTz2xWmMeq6bk2NU3XXvfJ+Q61m0xktWwt+1HSYf3JZsTms3aRJg==}
 
-  convex@1.38.0:
-    resolution: {integrity: sha512-122AC6y5lUS7mr39cluLw9+TOtRX5d/XxeivHhHObs/NTXoVvOnIgDzexVcxaz6Rk0oLFSoydSR1rDCltEz/0A==}
+  convex@1.40.0:
+    resolution: {integrity: sha512-jChWEB45q+9Ibryc7hg0l6hB1xA4zwE2y6ZhkhGP6oJkqYeiURkMagA2ZQZYMy1/T8PZ9ztoVJJtbL/+Ob851Q==}
     engines: {node: '>=18.0.0', npm: '>=7.0.0'}
     hasBin: true
     peerDependencies:
@@ -3377,8 +3377,8 @@ packages:
     resolution: {integrity: sha512-OELeY0Q61OXpdUfTp+oweA/vtLVg5VDOXh+3he3PNzLGG/y0oylSOC1xRVj0+l4vQ3tj/bB1HVHv1ocXkQceFA==}
     engines: {node: '>=0.8'}
 
-  ws@8.18.0:
-    resolution: {integrity: sha512-8VbfWfHLbbwu3+N6OKsOMpBdT4kXPDDB9cJk2bJ6mh9ucxdlnNvH1e+roYkKmN9Nxw2yjz7VzeO9oOz2zJ04Pw==}
+  ws@8.20.1:
+    resolution: {integrity: sha512-It4dO0K5v//JtTXuPkfEOaI3uUN87iYPnqo/ZzqCoG3g8uhA66QUMs/SrM0YK7/NAu+r4LMh/9dq2A7k+rHs+w==}
     engines: {node: '>=10.0.0'}
     peerDependencies:
       bufferutil: ^4.0.1
@@ -3592,10 +3592,10 @@ snapshots:
       '@babel/helper-string-parser': 7.27.1
       '@babel/helper-validator-identifier': 7.27.1
 
-  '@convex-dev/auth@0.0.86(@auth/core@0.37.4)(convex@1.38.0(react@19.1.0))(react@19.1.0)':
+  '@convex-dev/auth@0.0.86(@auth/core@0.37.4)(convex@1.40.0(react@19.1.0))(react@19.1.0)':
     dependencies:
       '@auth/core': 0.37.4
-      convex: 1.38.0(react@19.1.0)
+      convex: 1.40.0(react@19.1.0)
       cookie: 1.0.2
       is-network-error: 1.1.0
       jose: 5.10.0
@@ -5237,11 +5237,11 @@ snapshots:
 
   convert-source-map@2.0.0: {}
 
-  convex@1.38.0(react@19.1.0):
+  convex@1.40.0(react@19.1.0):
     dependencies:
       esbuild: 0.27.0
       prettier: 3.5.3
-      ws: 8.18.0
+      ws: 8.20.1
     optionalDependencies:
       react: 19.1.0
     transitivePeerDependencies:
@@ -6344,7 +6344,7 @@ snapshots:
 
   word@0.3.0: {}
 
-  ws@8.18.0: {}
+  ws@8.20.1: {}
 
   xlsx@0.18.5:
     dependencies:
